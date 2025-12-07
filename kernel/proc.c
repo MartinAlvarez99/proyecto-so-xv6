@@ -421,7 +421,63 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+// kernel/proc.c -> scheduler()
+
 void
+scheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+  
+  c->proc = 0;
+  
+  for(;;){
+    // Habilitar interrupciones para evitar deadlocks
+    intr_on();
+
+    struct proc *highest_priority_p = 0;
+    int max_priority = -1; // Asumimos que las prioridades son positivas
+
+    // 1. PRIMER BUCLE: Buscar el proceso con la MEJOR prioridad
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        // Si encontramos uno con mayor prioridad que el actual máximo...
+        if(p->priority > max_priority) {
+           // Liberamos el lock del candidato anterior si existía
+           if(highest_priority_p != 0){
+             release(&highest_priority_p->lock);
+           }
+           
+           // Este es nuestro nuevo candidato
+           highest_priority_p = p;
+           max_priority = p->priority;
+           
+           // Mantenemos el lock de este candidato y seguimos buscando
+           continue; 
+        }
+      }
+      release(&p->lock);
+    }
+
+    // 2. EJECUTAR EL GANADOR (Si encontramos alguno)
+    if(highest_priority_p != 0) {
+      p = highest_priority_p;
+      
+      // Aquí p->lock ya está adquirido por el bucle anterior
+      p->state = RUNNING;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+      
+      // El proceso vuelve aquí cuando deja de ejecutarse
+      c->proc = 0;
+      release(&p->lock);
+    }
+  }
+}
+
+/*void
 scheduler(void)
 {
   struct proc *p;
@@ -460,7 +516,7 @@ scheduler(void)
       asm volatile("wfi");
     }
   }
-}
+}*/
 
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores

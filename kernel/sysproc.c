@@ -107,3 +107,24 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// System call para cambiar la prioridad del proceso actual
+uint64
+sys_set_priority(void)
+{
+  int priority;
+
+  // Leer el argumento (entero) que nos pasa el usuario
+  if(argint(0, &priority) < 0)
+    return -1;
+
+  // Actualizar la prioridad del proceso actual
+  // yield() hace que el proceso suelte la CPU voluntariamente para que
+  // el scheduler re-evalúe si sigue siendo el más importante.
+  acquire(&myproc()->lock);
+  myproc()->priority = priority;
+  release(&myproc()->lock);
+  
+  yield(); 
+  return 0;
+}
