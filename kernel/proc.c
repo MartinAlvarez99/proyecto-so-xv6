@@ -146,6 +146,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->queue = 0; // inicia en la cola de mayor prioridad
+  p->ticks = 0; // sin ticks consumidos al crearse
+
   return p;
 }
 
@@ -437,23 +440,22 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    int found = 0; // indica si se encontró algún proceso runnable
+    for(int q = 0; q < 3 && found == 0; q++) { // recorre las colas de mayor a menor prioridad
+      for(p = proc; p < &proc[NPROC]; p++) { // recorre toda la tabla de procesos
+        acquire(&p->lock); // adquiere el lock del proceso inspeccionado
+        if(p->state == RUNNABLE && p->queue == q) { // elige solo procesos RUNNABLE en la cola actual
+          p->state = RUNNING; // marca el proceso como ejecutándose sin reiniciar sus ticks acumulados
+          c->proc = p; // asocia el proceso a la CPU
+          swtch(&c->context, &p->context); // cambia al contexto del proceso seleccionado
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+          c->proc = 0; // al volver, limpia el proceso asociado a la CPU
+          found = 1; // señala que se ejecutó un proceso en esta iteración
+        }
+        release(&p->lock); // libera el lock del proceso revisado
+        if(found) // si ya se ejecutó un proceso, corta el recorrido para volver a evaluar prioridades
+          break; // rompe el ciclo interno tras una ejecución
       }
-      release(&p->lock);
     }
     if(found == 0) {
       // nothing to run; stop running on this core until an interrupt.
@@ -498,6 +500,23 @@ yield(void)
   p->state = RUNNABLE;
   sched();
   release(&p->lock);
+}
+
+int
+sched_should_yield(void)
+{
+  struct proc *p = myproc(); // obtiene el proceso actualmente en CPU
+  if(p == 0) // si no hay proceso, no hay nada que forzar
+    return 0; // se mantiene la CPU libre
+  p->ticks++; // acumula un tick consumido por el proceso
+  int quantum = (p->queue == 0) ? 1 : (p->queue == 1 ? 2 : 5); // define el quantum según la cola
+  if(p->ticks >= quantum) { // verifica si agotó su quantum
+    if(p->queue < 2) // evita subir más allá de la cola más baja
+      p->queue++; // desciende a la siguiente cola de prioridad
+    p->ticks = 0; // reinicia el contador de ticks para el nuevo nivel
+    return 1; // indica que debe ceder la CPU
+  }
+  return 0; // aún no agotó su quantum
 }
 
 // A fork child's very first scheduling by scheduler()
@@ -579,7 +598,9 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
+        p->queue = 0; // al despertar vuelve a la cola de mayor prioridad
+        p->ticks = 0; // limpia ticks acumulados al dormir
+        p->state = RUNNABLE; // marca el proceso como listo para ejecutarse
       }
       release(&p->lock);
     }

@@ -81,8 +81,8 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  if(which_dev == 2 && sched_should_yield()) // cede solo si agotó su quantum por temporizador
+    yield(); // entrega la CPU al planificador
 
   prepare_return();
 
@@ -152,8 +152,8 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+  if(which_dev == 2 && myproc() != 0 && sched_should_yield()) // solo fuerza yield si el temporizador agotó el quantum
+    yield(); // regresa al planificador cuando corresponde
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
