@@ -2,13 +2,10 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 
-// Una función que gasta CPU tontamente
 void cpu_waster(int k) {
   int i, j;
-  // Hacemos muchas iteraciones para que se note el tiempo
   for(i = 0; i < k; i++) {
     for(j = 0; j < 1000000; j++) {
-      // Operaciones matemáticas simples para consumir ciclos
       asm("nop"); 
     }
   }
@@ -18,34 +15,43 @@ int main(int argc, char *argv[]) {
   int pid;
   int start_time, end_time;
 
-  // Vamos a lanzar 3 procesos hijos
-  // En el xv6 original, todos deberían ser tratados igual.
+  printf("Iniciando prueba de planificador con prioridades...\n");
+
   for (int i = 0; i < 3; i++) {
     pid = fork();
     
     if (pid < 0) {
-      printf("Error al hacer fork\n");
+      printf("Error: fork fallo\n");
       exit(1);
     }
 
     if (pid == 0) {
-      // Este es el proceso HIJO
-      start_time = uptime(); // Hora de inicio (en ticks)
-      printf("Proceso %d iniciado (Hijo #%d)\n", getpid(), i);
-      
-      cpu_waster(500000); 
-      
-      end_time = uptime(); // Hora de fin
-      printf("Proceso %d termino. Tiempo: %d ticks\n", getpid(), end_time - start_time);
-      exit(0); // El hijo muere aquí
+      // --- CODIGO DEL HIJO ---
+      if (i == 2) {
+          printf("Hijo #%d (PID %d) iniciando con ALTA PRIORIDAD (20)\n", i, getpid());
+          set_priority(20); 
+      } else {
+          printf("Hijo #%d (PID %d) iniciando con prioridad normal (10)\n", i, getpid());
+          set_priority(10);
+      }
+
+      sleep(10); // Esperar 10 ticks para que todos los hijos nazcan
+
+      start_time = uptime();
+      cpu_waster(50000); // Simular carga de CPU
+      end_time = uptime();
+
+      printf(">>> Hijo #%d (PID %d) TERMINO. Tiempo total: %d ticks\n", i, getpid(), end_time - start_time);
+      exit(0);
     }
+    // El padre continua el bucle para crear al siguiente hijo...
   }
 
-  // El proceso PADRE espera a que todos los hijos terminen
+  // El padre espera a los 3 hijos
   for (int i = 0; i < 3; i++) {
     wait(0);
   }
   
-  printf("Test finalizado.\n");
+  printf("Test finalizado exitosamente.\n");
   exit(0);
 }

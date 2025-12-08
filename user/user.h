@@ -49,3 +49,4 @@ void* malloc(uint);
 void free(void*);
 
 int set_priority(int priority);
+int sleep(int);

@@ -115,8 +115,7 @@ sys_set_priority(void)
   int priority;
 
   // Leer el argumento (entero) que nos pasa el usuario
-  if(argint(0, &priority) < 0)
-    return -1;
+  argint(0, &priority);
 
   // Actualizar la prioridad del proceso actual
   // yield() hace que el proceso suelte la CPU voluntariamente para que
