@@ -17,6 +17,7 @@ struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
+int queue_quantum(int level); // Obtiene el quantum según la cola
 
 extern char trampoline[]; // trampoline.S
 
@@ -122,7 +123,10 @@ allocproc(void)
   return 0;
 
 found:
-  p->pid = allocpid();
+  p->pid = allocpid(); // Asigno un nuevo pid
+  p->queue = 0; // Inicio en la cola de mayor prioridad
+  p->ticks_run = 0; // Reinicio el conteo de ticks usados
+  p->slice_expired = 0; // Indico que no agotó su quantum aún
   p->state = USED;
 
   // Allocate a trapframe page.
@@ -169,6 +173,21 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->queue = 0; // Restablezco la cola a la más alta al liberar
+  p->ticks_run = 0; // Limpio los ticks usados previos
+  p->slice_expired = 0; // Borro la marca de quantum agotado
+}
+
+int queue_quantum(int level)
+{
+  if(level == 0)  // Cola más alta
+    return 2;     // Quantum muy corto para premiar RR rápido
+
+  if(level == 1)  // Cola intermedia
+    return 20;    // Quantum grande pero manejable
+
+  // level == 2 (cola baja)
+  return 2000;    // CASTIGO EXTREMO
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -426,6 +445,7 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int level; // Nivel de cola que se está buscando
 
   c->proc = 0;
   for(;;){
@@ -437,24 +457,39 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    int found = 0; // Indica si se encontró algún proceso listo
+    for(level = 0; level < 3 && !found; level++) { // Recorro las colas de mayor a menor prioridad
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock); // Tomo el lock del proceso evaluado
+        if(p->state == RUNNABLE && p->queue == level) { // Selecciono solo RUNNABLE en el nivel buscado
+          p->state = RUNNING; // Marco al proceso como ejecutándose
+          p->slice_expired = 0; // Limpio la bandera de quantum agotado previo
+          c->proc = p; // Asigno el proceso a la CPU actual
+          swtch(&c->context, &p->context); // Cambio de contexto al proceso elegido
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+          c->proc = 0; // Al volver, libero la referencia en la CPU
+          if(p->state == RUNNABLE) { // Solo ajusto si sigue listo para ejecutar
+            if(p->slice_expired) { // Si agotó su quantum
+              int old_level = p->queue; // Conservo la cola previa para restar su quantum usado
+              if(p->queue < 2) // Solo desciendo si no está en la cola más baja
+                p->queue++; // Bajo un nivel de prioridad
+              p->ticks_run -= queue_quantum(old_level); // Resto el quantum consumido para arrastrar uso previo
+              if(p->ticks_run < 0) // Evito valores negativos si no había resto
+                p->ticks_run = 0; // Normalizo a cero cuando no queda uso acumulado
+              p->slice_expired = 0; // Borro la marca de quantum agotado para la próxima vez
+            } else {
+              // Si cedió CPU sin consumir todo el quantum, dejamos ticks_run
+              // acumulando para que eventualmente pierda prioridad si abusa.
+            }
+          }
+          release(&p->lock); // Suelto el lock del proceso tras planificar
+          found = 1; // Indico que se encontró trabajo
+          break; // Salgo del for interno para reevaluar desde la cola más alta
+        }
+        release(&p->lock); // Suelto el lock si el proceso no era elegible
       }
-      release(&p->lock);
     }
+    // Este recorrido por colas diferenciadas asegura que test_scheduler evidencie las prioridades
     if(found == 0) {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
@@ -579,7 +614,10 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
+        p->state = RUNNABLE; // Marco al proceso como listo para correr
+        p->queue = 0; // Reposiciono al proceso en la cola de mayor prioridad
+        p->ticks_run = 0; // Reinicio su conteo de ticks al despertar
+        p->slice_expired = 0; // Limpio la marca de quantum agotado al despertar
       }
       release(&p->lock);
     }
@@ -688,3 +726,25 @@ procdump(void)
     printf("\n");
   }
 }
+
+// ===============================================
+//  Sube TODOS los procesos RUNNABLE a la cola 0
+// ===============================================
+void
+boost_MLFQ(void)
+{
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+
+    if(p->state == RUNNABLE){
+      p->queue = 0;       // subir a cola más alta
+      p->ticks_run = 0;   // reiniciar su quantum
+      p->slice_expired = 0;
+    }
+
+    release(&p->lock);
+  }
+}
+

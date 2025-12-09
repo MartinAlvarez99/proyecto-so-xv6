@@ -104,4 +104,7 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int queue;                   // Nivel actual de la cola MLFQ (0 alta, 2 baja)
+  int ticks_run;               // Ticks consumidos en el quantum actual
+  int slice_expired;           // Bandera para saber si agotó su quantum
 };

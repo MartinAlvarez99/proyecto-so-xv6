@@ -81,9 +81,7 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
-
+  
   prepare_return();
 
   // the user page table to switch to, for trampoline.S
@@ -152,8 +150,36 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+ if(which_dev == 2 && myproc() != 0){
+
+    // Registro de tick consumido por el proceso
+    myproc()->ticks_run++;
+
+    // Boost global cada 300 ticks
+    ticks++;
+    if(ticks % 300 == 0){
+        boost_MLFQ();
+    }
+
+    // Lógica de quantum según cola del proceso
+    int lvl = myproc()->queue;
+
+    if(lvl < 2){
+        // Colas 0 y 1: si agotó su quantum → yield
+        if(myproc()->ticks_run >= 1){
+            myproc()->slice_expired = 1;
+            myproc()->ticks_run = 0; // ← NECESARIO
+            yield();
+        }
+    } else {
+        // Cola 2: yield inmediato SIEMPRE
+        myproc()->slice_expired = 1;
+        myproc()->ticks_run = 0;     // ← NECESARIO
+        yield();
+    }
+  }
+
+
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
